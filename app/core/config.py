@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
 
     project_name: str
-    environment: str = "local"
+    environment: str
     database_url: str
 
     secret_key: str
@@ -16,11 +16,8 @@ class Settings(BaseSettings):
     frontend_url: str
     reset_token_expire_minutes: int = 30
 
-    # --- SMTP ---
-    smtp_host: str
-    smtp_port: int
-    smtp_user: str
-    smtp_password: str
+    # --- RESEND ---
+    resend_api_key: str
     from_email: str
 
     # --- SIIGO ---

@@ -129,7 +129,7 @@ async def get_kiosco_context(
             algorithms=["HS256"],
         )
     except JWTError:
-        return None  # 👈 NO excepción
+        return None
 
     user_id = payload.get("sub")
     if not user_id:
