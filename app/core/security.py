@@ -42,7 +42,12 @@ def create_access_token(data: dict) -> str:
         algorithm="HS256",
     )
 
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=7)
+    to_encode.update({"exp": expire})
 
+    return jwt.encode(to_encode, settings.secret_key, algorithm="HS256")
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),

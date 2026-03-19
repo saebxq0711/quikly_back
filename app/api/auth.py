@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.schemas.auth import LoginSchema, ForgotPasswordRequest, ResetPasswordRequest, MessageResponse
 from app.services.auth_service import authenticate, send_reset_password_email, reset_password
-from app.core.security import create_access_token
+from app.core.security import create_access_token, get_current_user
 
 router = APIRouter()
 
@@ -24,6 +24,19 @@ async def login(data: LoginSchema, db: AsyncSession = Depends(get_db)):
     return {
         "access_token": token,
         "rol": user["rol"]
+    }
+
+@router.post("/refresh")
+async def refresh_token(current_user = Depends(get_current_user)):
+    new_token = create_access_token({
+        "sub": str(current_user.id_usuario),
+        "rol": current_user.rol,
+        "restaurante_id": current_user.restaurante_id
+    })
+
+    return {
+        "access_token": new_token,
+        "rol": current_user.rol
     }
 
 # --- Olvidé contraseña ---

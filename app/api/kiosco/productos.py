@@ -139,29 +139,39 @@ async def get_productos_por_categoria(
 @router.get("/productos/sugeridos")
 async def get_productos_sugeridos(
     limit: int = 4,
+    exclude_ids: str | None = None,
     ctx: KioscoContext | None = Depends(get_kiosco_context),
     db: AsyncSession = Depends(get_db),
 ):
-
     if not ctx:
         return []
 
-    stmt = (
-        select(Producto)
-        .where(
-            Producto.restaurante_id == ctx.restaurante_id,
-            Producto.estado_id == 1,
-        )
-        .order_by(func.random())
-        .limit(limit)
+    exclude_list: list[int] = []
+    if exclude_ids:
+        exclude_list = [
+            int(x) for x in exclude_ids.split(",") if x.isdigit()
+        ]
+
+    stmt = select(Producto).where(
+        Producto.restaurante_id == ctx.restaurante_id,
+        Producto.estado_id == 1,
     )
+
+    if exclude_list:
+        stmt = stmt.where(~Producto.id_producto.in_(exclude_list))
+
+    stmt = stmt.order_by(func.random()).limit(limit)
 
     result = await db.execute(stmt)
     productos = result.scalars().all()
 
+    # 🔥 FILTRO FINAL DEFENSIVO (por si SQLAlchemy o DB hacen cosas raras)
+    productos = [p for p in productos if p.estado_id == 1]
+
     response = []
 
     for p in productos:
+        print("DEBUG FINAL:", p.id_producto, p.estado_id)
 
         precio_base = float(p.precio_base)
 
@@ -179,13 +189,10 @@ async def get_productos_sugeridos(
         response.append({
             "id": p.id_producto,
             "nombre": p.nombre,
-
             "precio_base": precio_base,
             "precio_final": precio_final,
-
             "tiene_promocion": tiene_promocion,
             "porcentaje_descuento": porcentaje_descuento,
-
             "img": p.img_producto,
         })
 

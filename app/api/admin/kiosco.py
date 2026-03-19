@@ -1,20 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from datetime import datetime
 
 from app.db.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, hash_password, verify_password
 from app.models.usuario import Usuario
 from app.models.usuarios_rol import UsuarioRol
 from app.models.restaurante import Restaurante
-from app.core.security import hash_password
+from app.models.historial_contrasena import HistorialContrasena
 
 router = APIRouter(
     prefix="/admin/kiosco",
     tags=["Admin - Kiosco"]
 )
 
+# ---------------------
+# Helper: restaurante
+# ---------------------
 async def get_admin_restaurante_id(admin, db: AsyncSession) -> int:
     stmt = select(UsuarioRol.restaurante_id).where(
         UsuarioRol.user_id == admin.id_usuario,
@@ -24,13 +27,14 @@ async def get_admin_restaurante_id(admin, db: AsyncSession) -> int:
     restaurante_id = (await db.execute(stmt)).scalar()
 
     if not restaurante_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin no asociado a restaurante"
-        )
+        raise HTTPException(403, "Admin no asociado a restaurante")
 
     return restaurante_id
 
+
+# ---------------------
+# GET usuario kiosco
+# ---------------------
 @router.get("/usuario")
 async def obtener_usuario_kiosco(
     admin=Depends(get_current_user),
@@ -43,7 +47,7 @@ async def obtener_usuario_kiosco(
         .join(UsuarioRol)
         .where(
             UsuarioRol.restaurante_id == restaurante_id,
-            UsuarioRol.rol_id == 3  # kiosco
+            UsuarioRol.rol_id == 3
         )
         .limit(1)
     )
@@ -51,7 +55,7 @@ async def obtener_usuario_kiosco(
     usuario = (await db.execute(stmt)).scalar_one_or_none()
 
     if not usuario:
-        raise HTTPException(status_code=404, detail="Usuario kiosco no existe")
+        raise HTTPException(404, "Usuario kiosco no existe")
 
     restaurante = await db.get(Restaurante, restaurante_id)
 
@@ -66,6 +70,10 @@ async def obtener_usuario_kiosco(
         "img_restaurante": restaurante.logo if restaurante else None,
     }
 
+
+# ---------------------
+# Toggle estado
+# ---------------------
 @router.patch("/usuario/estado")
 async def toggle_estado_usuario_kiosco(
     admin=Depends(get_current_user),
@@ -98,6 +106,10 @@ async def toggle_estado_usuario_kiosco(
         "estado_id": usuario.estado_id
     }
 
+
+# ---------------------
+# Cambiar contraseña
+# ---------------------
 @router.patch("/usuario/password")
 async def cambiar_password_kiosco(
     password: str = Body(...),
@@ -120,13 +132,77 @@ async def cambiar_password_kiosco(
     if not usuario:
         raise HTTPException(404, "Usuario kiosco no encontrado")
 
+    # -----------------------------
+    # ❌ misma contraseña actual
+    # -----------------------------
+    if verify_password(password, usuario.contrasena):
+        raise HTTPException(400, "No puedes usar la misma contraseña actual")
+
+    # -----------------------------
+    # ❌ validar historial (últimas 2)
+    # -----------------------------
+    stmt_hist = (
+        select(HistorialContrasena)
+        .where(HistorialContrasena.usuario_id == usuario.id_usuario)
+        .order_by(HistorialContrasena.fecha_creacion.desc())
+        .limit(2)
+    )
+
+    historial = (await db.execute(stmt_hist)).scalars().all()
+
+    for h in historial:
+        if verify_password(password, h.contrasena):
+            raise HTTPException(
+                400,
+                "No puedes reutilizar las últimas contraseñas"
+            )
+
+    # -----------------------------
+    # 💾 guardar actual en historial
+    # -----------------------------
+    historial_nuevo = HistorialContrasena(
+        usuario_id=usuario.id_usuario,
+        contrasena=usuario.contrasena,
+        fecha_creacion=datetime.utcnow()
+    )
+
+    db.add(historial_nuevo)
+
+    # -----------------------------
+    # 🔁 actualizar password
+    # -----------------------------
     usuario.contrasena = hash_password(password)
     usuario.fecha_actualizacion = datetime.utcnow()
 
     await db.commit()
 
+    # -----------------------------
+    # 🧹 limpiar historial (solo 2)
+    # -----------------------------
+    stmt_clean = (
+        select(HistorialContrasena)
+        .where(HistorialContrasena.usuario_id == usuario.id_usuario)
+        .order_by(HistorialContrasena.fecha_creacion.desc())
+    )
+
+    historial_total = (await db.execute(stmt_clean)).scalars().all()
+
+    if len(historial_total) > 2:
+        ids_to_delete = [h.id_historial_contrasena for h in historial_total[2:]]
+
+        await db.execute(
+            delete(HistorialContrasena).where(
+                HistorialContrasena.id_historial_contrasena.in_(ids_to_delete)
+            )
+        )
+        await db.commit()
+
     return {"ok": True}
 
+
+# ---------------------
+# Crear usuario kiosco
+# ---------------------
 @router.post("/usuario")
 async def crear_usuario_kiosco(
     tipo_documento_id: int = Body(...),
@@ -141,7 +217,6 @@ async def crear_usuario_kiosco(
 ):
     restaurante_id = await get_admin_restaurante_id(admin, db)
 
-    # validar que no exista ya
     stmt = (
         select(Usuario.id_usuario)
         .join(UsuarioRol)
@@ -150,17 +225,20 @@ async def crear_usuario_kiosco(
             UsuarioRol.rol_id == 3
         )
     )
+
     if (await db.execute(stmt)).first():
         raise HTTPException(400, "El usuario del kiosco ya existe")
 
+    hashed = hash_password(contrasena)
+
     usuario = Usuario(
-        tipo_documento_id=tipo_documento_id,  # 3 = NIT
+        tipo_documento_id=tipo_documento_id,
         documento=documento,
         nombres=nombres,
         apellidos=apellidos,
         telefono=telefono,
         correo=correo,
-        contrasena=hash_password(contrasena),
+        contrasena=hashed,
         estado_id=1,
         fecha_creacion=datetime.utcnow(),
     )
@@ -169,9 +247,18 @@ async def crear_usuario_kiosco(
     await db.commit()
     await db.refresh(usuario)
 
+    # guardar en historial inicial
+    historial = HistorialContrasena(
+        usuario_id=usuario.id_usuario,
+        contrasena=hashed,
+        fecha_creacion=datetime.utcnow()
+    )
+
+    db.add(historial)
+
     rol = UsuarioRol(
         user_id=usuario.id_usuario,
-        rol_id=3,  # kiosco
+        rol_id=3,
         restaurante_id=restaurante_id
     )
 

@@ -1,9 +1,10 @@
-# app/api/admin/menu.py
-
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
+
+import os
+import uuid
 
 from app.core.security import get_current_user
 from app.db.database import get_db
@@ -20,11 +21,11 @@ router = APIRouter(
     tags=["Admin Restaurante - Menú"]
 )
 
-# ======================
-# DB dependency
-# ======================
+UPLOAD_DIR = "uploads/categorias"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
+UPLOAD_DIR_PRODUCTOS = "uploads/productos"
+os.makedirs(UPLOAD_DIR_PRODUCTOS, exist_ok=True)
 
 # ======================
 # Helper: obtener restaurante del admin
@@ -32,7 +33,7 @@ router = APIRouter(
 async def get_admin_restaurante_id(admin, db: AsyncSession) -> int:
     stmt = select(UsuarioRol.restaurante_id).where(
         UsuarioRol.user_id == admin.id_usuario,
-        UsuarioRol.rol_id == 2  # admin_restaurante
+        UsuarioRol.rol_id == 2
     ).limit(1)
 
     restaurante_id = (await db.execute(stmt)).scalar()
@@ -55,7 +56,6 @@ async def obtener_menu(
     db: AsyncSession = Depends(get_db)
 ):
     restaurante_id = await get_admin_restaurante_id(admin, db)
-
     categorias_data = await get_restaurant_menu(db, restaurante_id)
 
     return MenuRestauranteOut(
@@ -74,26 +74,38 @@ async def obtener_menu(
 
 
 # ======================
-# POST: Crear categoría
+# POST: Crear categoría (CON IMAGEN)
 # ======================
 @router.post("/categoria", response_model=CategoriaOut)
 async def crear_categoria(
-    nombre: str = Body(..., embed=True),
-    img_categoria: str | None = Body(None, embed=True),
+    nombre: str = Form(...),
+    imagen: UploadFile | None = File(None),
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     restaurante_id = await get_admin_restaurante_id(admin, db)
 
+    img_url = None
+
+    if imagen:
+        ext = imagen.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{ext}"
+        filepath = f"{UPLOAD_DIR}/{filename}"
+
+        with open(filepath, "wb") as f:
+            f.write(await imagen.read())
+
+        img_url = f"/{filepath}"
+
     stmt = select(func.coalesce(func.max(Categoria.orden), 0)).where(
-    Categoria.restaurante_id == restaurante_id
-)
+        Categoria.restaurante_id == restaurante_id
+    )
     ultimo_orden = (await db.execute(stmt)).scalar()
 
     nueva_cat = Categoria(
         restaurante_id=restaurante_id,
         nombre=nombre,
-        img_categoria=img_categoria,
+        img_categoria=img_url,
         orden=ultimo_orden + 1,
         estado_id=1
     )
@@ -113,13 +125,13 @@ async def crear_categoria(
 
 
 # ======================
-# PUT: Editar categoría
+# PUT: Editar categoría (CON IMAGEN)
 # ======================
 @router.put("/categoria/{categoria_id}", response_model=CategoriaOut)
 async def editar_categoria(
     categoria_id: int,
-    nombre: str = Body(..., embed=True),
-    img_categoria: str | None = Body(None, embed=True),
+    nombre: str = Form(...),
+    imagen: UploadFile | None = File(None),
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -135,7 +147,16 @@ async def editar_categoria(
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
 
     cat.nombre = nombre
-    cat.img_categoria = img_categoria
+
+    if imagen:
+        ext = imagen.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{ext}"
+        filepath = f"{UPLOAD_DIR}/{filename}"
+
+        with open(filepath, "wb") as f:
+            f.write(await imagen.read())
+
+        cat.img_categoria = f"/{filepath}"
 
     await db.commit()
     await db.refresh(cat)
@@ -185,6 +206,7 @@ async def cambiar_estado_categoria(
     )
 
 
+# ======================
 @router.put("/orden")
 async def actualizar_orden(
     ordenes: list[CategoriaOrdenIn],
@@ -214,12 +236,9 @@ async def obtener_categoria_detalle(
 ):
     restaurante_id = await get_admin_restaurante_id(admin, db)
 
-    stmt = (
-        select(Categoria)
-        .where(
-            Categoria.id_categoria == categoria_id,
-            Categoria.restaurante_id == restaurante_id
-        )
+    stmt = select(Categoria).where(
+        Categoria.id_categoria == categoria_id,
+        Categoria.restaurante_id == restaurante_id
     )
 
     categoria = (await db.execute(stmt)).scalar_one_or_none()
@@ -227,12 +246,13 @@ async def obtener_categoria_detalle(
     if not categoria:
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
 
-    # ⚠️ IMPORTANTE: lazy loading
     productos = [
         ProductoOut(
             id_producto=p.id_producto,
             nombre=p.nombre,
+            descripcion=p.descripcion,
             precio_base=p.precio_base,
+            img_producto=p.img_producto, 
             estado_id=p.estado_id,
         )
         for p in categoria.productos
@@ -246,7 +266,50 @@ async def obtener_categoria_detalle(
         estado_id=categoria.estado_id,
         productos=productos,
     )
-    
+
+
+@router.post("/producto")
+async def crear_producto(
+    nombre: str = Form(...),
+    descripcion: str = Form(None),
+    precio_base: float = Form(...),
+    categoria_id: int = Form(...),
+    imagen: UploadFile | None = File(None),
+    admin=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    restaurante_id = await get_admin_restaurante_id(admin, db)
+
+    img_url = None
+
+    if imagen:
+        ext = imagen.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{ext}"
+        filepath = f"uploads/productos/{filename}"
+
+        with open(filepath, "wb") as f:
+            f.write(await imagen.read())
+
+        img_url = f"/{filepath}"
+
+    nuevo = Producto(
+        restaurante_id=restaurante_id,
+        categoria_id=categoria_id,
+        nombre=nombre,
+        descripcion=descripcion,
+        precio_base=precio_base,
+        img_producto=img_url,
+        estado_id=1
+    )
+
+    db.add(nuevo)
+    await db.commit()
+    await db.refresh(nuevo)
+
+    return {"id_producto": nuevo.id_producto}
+
+
+# ======================
 @router.get("/producto/{producto_id}")
 async def obtener_producto_detalle(
     producto_id: int,
@@ -301,20 +364,18 @@ async def obtener_producto_detalle(
     }
 
 
-
+# ======================
 @router.post("/producto/{producto_id}/grupo")
 async def crear_grupo_opcion(
     producto_id: int,
     nombre: str = Body(...),
-    tipo: str = Body(...),  # tamaño | topping
+    tipo: str = Body(...),
     obligatorio: bool = Body(False),
     min_selecciones: int = Body(0),
     max_selecciones: int = Body(1),
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    restaurante_id = await get_admin_restaurante_id(admin, db)
-
     grupo = GrupoOpcionProducto(
         producto_id=producto_id,
         nombre=nombre,
@@ -332,6 +393,7 @@ async def crear_grupo_opcion(
     return {"id_grupo_opcion": grupo.id_grupo_opcion}
 
 
+# ======================
 @router.post("/grupo/{grupo_id}/opcion")
 async def crear_opcion(
     grupo_id: int,
@@ -354,6 +416,7 @@ async def crear_opcion(
     return {"id_opcion_producto": opcion.id_opcion_producto}
 
 
+# ======================
 @router.patch("/opcion/{id_opcion}/estado")
 async def toggle_opcion(
     id_opcion: int,
@@ -372,4 +435,64 @@ async def toggle_opcion(
     return {
         "id_opcion_producto": opcion.id_opcion_producto,
         "estado_id": opcion.estado_id,
+    }
+
+
+@router.put("/producto/{producto_id}")
+async def editar_producto(
+    producto_id: int,
+    nombre: str = Form(None),
+    descripcion: str = Form(None),
+    precio_base: float = Form(None),
+    imagen: UploadFile | None = File(None),
+    admin=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    producto = await db.get(Producto, producto_id)
+
+    if not producto:
+        raise HTTPException(404, "Producto no encontrado")
+
+    if nombre:
+        producto.nombre = nombre
+
+    if descripcion:
+        producto.descripcion = descripcion
+
+    if precio_base:
+        producto.precio_base = precio_base
+
+    if imagen:
+        ext = imagen.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{ext}"
+        filepath = f"{UPLOAD_DIR_PRODUCTOS}/{filename}"
+
+        with open(filepath, "wb") as f:
+            f.write(await imagen.read())
+
+        producto.img_producto = f"/{filepath}"
+
+    await db.commit()
+    await db.refresh(producto)
+
+    return {"ok": True}
+
+
+@router.patch("/producto/{producto_id}/estado")
+async def toggle_producto(
+    producto_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    producto = await db.get(Producto, producto_id)
+
+    if not producto:
+        raise HTTPException(404, "Producto no encontrado")
+
+    producto.estado_id = 2 if producto.estado_id == 1 else 1
+
+    await db.commit()
+    await db.refresh(producto)
+
+    return {
+        "estado_id": producto.estado_id
     }
