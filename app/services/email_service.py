@@ -24,7 +24,7 @@ async def send_reset_password_email(to_email: str, token: str):
     ">
         <!-- Logo arriba centrado -->
         <div style="text-align:center; margin-bottom: 30px;">
-            <img src="https://quikly-front-pa66.vercel.app/images/logo.png" 
+            <img src="https://quiklygo.com/images/logo.png" 
                  alt="QuiklyGo" 
                  style="width:180px; max-width:100%; height:auto;">
         </div>

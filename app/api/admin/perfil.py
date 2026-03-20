@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, delete
 from passlib.context import CryptContext
 import os
 import uuid
@@ -21,6 +21,9 @@ router = APIRouter(
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+UPLOAD_DIR = "uploads/logos"
+
+
 
 @router.put("/contrasena")
 async def cambiar_contrasena(
@@ -30,27 +33,90 @@ async def cambiar_contrasena(
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # -----------------------------
+    # 🧠 validaciones básicas
+    # -----------------------------
     if nueva_contrasena != confirmar_contrasena:
         raise HTTPException(400, "Las contraseñas no coinciden")
 
-    if len(nueva_contrasena) < 8:
-        raise HTTPException(400, "La contraseña debe tener al menos 8 caracteres")
+    if not nueva_contrasena or len(nueva_contrasena.strip()) < 8:
+        raise HTTPException(400, "Mínimo 8 caracteres")
 
-    stmt = select(Usuario).where(Usuario.id_usuario == admin.id_usuario)
-    usuario = (await db.execute(stmt)).scalar_one()
+    # 🔒 transacción completa
+    async with db.begin():
 
-    if not pwd_context.verify(contrasena_actual, usuario.contrasena):
-        raise HTTPException(401, "Contraseña actual incorrecta")
+        # -----------------------------
+        # 👤 obtener usuario
+        # -----------------------------
+        stmt = select(Usuario).where(
+            Usuario.id_usuario == admin.id_usuario
+        )
+        usuario = (await db.execute(stmt)).scalar_one()
 
-    usuario.contrasena = pwd_context.hash(nueva_contrasena)
+        # -----------------------------
+        # ❌ validar contraseña actual
+        # -----------------------------
+        if not pwd_context.verify(contrasena_actual, usuario.contrasena):
+            raise HTTPException(401, "Contraseña actual incorrecta")
 
-    await db.commit()
+        # -----------------------------
+        # ❌ evitar misma contraseña
+        # -----------------------------
+        if pwd_context.verify(nueva_contrasena, usuario.contrasena):
+            raise HTTPException(400, "No puedes usar la misma contraseña actual")
+
+        # -----------------------------
+        # 📜 historial ordenado sólido
+        # -----------------------------
+        stmt_hist = (
+            select(HistorialContrasena)
+            .where(HistorialContrasena.usuario_id == usuario.id_usuario)
+            .order_by(
+                HistorialContrasena.fecha_creacion.desc(),
+                HistorialContrasena.id_historial_contrasena.desc()
+            )
+        )
+
+        historial = (await db.execute(stmt_hist)).scalars().all()
+
+        # -----------------------------
+        # ❌ validar últimas 2
+        # -----------------------------
+        for h in historial[:2]:
+            if pwd_context.verify(nueva_contrasena, h.contrasena):
+                raise HTTPException(
+                    400,
+                    "No puedes reutilizar las últimas contraseñas"
+                )
+
+        # -----------------------------
+        # 🧹 mantener máximo 2 (ANTES)
+        # -----------------------------
+        if len(historial) >= 2:
+            ids_to_delete = [
+                h.id_historial_contrasena for h in historial[1:]
+            ]
+
+            await db.execute(
+                delete(HistorialContrasena).where(
+                    HistorialContrasena.id_historial_contrasena.in_(ids_to_delete)
+                )
+            )
+
+        # -----------------------------
+        # 💾 guardar contraseña actual
+        # -----------------------------
+        db.add(HistorialContrasena(
+            usuario_id=usuario.id_usuario,
+            contrasena=usuario.contrasena
+        ))
+
+        # -----------------------------
+        # 🔁 actualizar contraseña
+        # -----------------------------
+        usuario.contrasena = pwd_context.hash(nueva_contrasena)
 
     return {"ok": True, "message": "Contraseña actualizada correctamente"}
-
-
-
-UPLOAD_DIR = "uploads/logos"
 
 
 @router.put("/logo")

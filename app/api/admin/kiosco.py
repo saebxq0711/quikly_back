@@ -116,86 +116,102 @@ async def cambiar_password_kiosco(
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # -----------------------------
+    # 🧠 validación básica backend
+    # -----------------------------
+    if not password or len(password.strip()) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe tener al menos 6 caracteres"
+        )
+
     restaurante_id = await get_admin_restaurante_id(admin, db)
 
-    stmt = (
-        select(Usuario)
-        .join(UsuarioRol)
-        .where(
-            UsuarioRol.restaurante_id == restaurante_id,
-            UsuarioRol.rol_id == 3
+    # 🔒 transacción completa
+    async with db.begin():
+
+        # -----------------------------
+        # 👤 obtener usuario kiosco
+        # -----------------------------
+        stmt = (
+            select(Usuario)
+            .join(UsuarioRol)
+            .where(
+                UsuarioRol.restaurante_id == restaurante_id,
+                UsuarioRol.rol_id == 3
+            )
         )
-    )
 
-    usuario = (await db.execute(stmt)).scalar_one_or_none()
+        usuario = (await db.execute(stmt)).scalar_one_or_none()
 
-    if not usuario:
-        raise HTTPException(404, "Usuario kiosco no encontrado")
+        if not usuario:
+            raise HTTPException(404, "Usuario kiosco no encontrado")
 
-    # -----------------------------
-    # ❌ misma contraseña actual
-    # -----------------------------
-    if verify_password(password, usuario.contrasena):
-        raise HTTPException(400, "No puedes usar la misma contraseña actual")
-
-    # -----------------------------
-    # ❌ validar historial (últimas 2)
-    # -----------------------------
-    stmt_hist = (
-        select(HistorialContrasena)
-        .where(HistorialContrasena.usuario_id == usuario.id_usuario)
-        .order_by(HistorialContrasena.fecha_creacion.desc())
-        .limit(2)
-    )
-
-    historial = (await db.execute(stmt_hist)).scalars().all()
-
-    for h in historial:
-        if verify_password(password, h.contrasena):
+        # -----------------------------
+        # ❌ misma contraseña actual
+        # -----------------------------
+        if verify_password(password, usuario.contrasena):
             raise HTTPException(
-                400,
-                "No puedes reutilizar las últimas contraseñas"
+                status_code=400,
+                detail="No puedes usar la misma contraseña actual"
             )
 
-    # -----------------------------
-    # 💾 guardar actual en historial
-    # -----------------------------
-    historial_nuevo = HistorialContrasena(
-        usuario_id=usuario.id_usuario,
-        contrasena=usuario.contrasena,
-        fecha_creacion=datetime.utcnow()
-    )
-
-    db.add(historial_nuevo)
-
-    # -----------------------------
-    # 🔁 actualizar password
-    # -----------------------------
-    usuario.contrasena = hash_password(password)
-    usuario.fecha_actualizacion = datetime.utcnow()
-
-    await db.commit()
-
-    # -----------------------------
-    # 🧹 limpiar historial (solo 2)
-    # -----------------------------
-    stmt_clean = (
-        select(HistorialContrasena)
-        .where(HistorialContrasena.usuario_id == usuario.id_usuario)
-        .order_by(HistorialContrasena.fecha_creacion.desc())
-    )
-
-    historial_total = (await db.execute(stmt_clean)).scalars().all()
-
-    if len(historial_total) > 2:
-        ids_to_delete = [h.id_historial_contrasena for h in historial_total[2:]]
-
-        await db.execute(
-            delete(HistorialContrasena).where(
-                HistorialContrasena.id_historial_contrasena.in_(ids_to_delete)
+        # -----------------------------
+        # 📜 obtener historial (orden sólido)
+        # -----------------------------
+        stmt_hist = (
+            select(HistorialContrasena)
+            .where(HistorialContrasena.usuario_id == usuario.id_usuario)
+            .order_by(
+                HistorialContrasena.fecha_creacion.desc(),
+                HistorialContrasena.id_historial_contrasena.desc()
             )
         )
-        await db.commit()
+
+        historial = (await db.execute(stmt_hist)).scalars().all()
+
+        # -----------------------------
+        # ❌ validar contra últimas 2
+        # -----------------------------
+        for h in historial[:2]:
+            if verify_password(password, h.contrasena):
+                raise HTTPException(
+                    status_code=400,
+                    detail="No puedes reutilizar las últimas contraseñas"
+                )
+
+        # -----------------------------
+        # 🧹 mantener máximo 2 (eliminar antes)
+        # -----------------------------
+        if len(historial) >= 2:
+            ids_to_delete = [
+                h.id_historial_contrasena for h in historial[1:]
+            ]
+
+            await db.execute(
+                delete(HistorialContrasena).where(
+                    HistorialContrasena.id_historial_contrasena.in_(ids_to_delete)
+                )
+            )
+
+        # -----------------------------
+        # 💾 guardar contraseña actual en historial
+        # -----------------------------
+        nuevo_historial = HistorialContrasena(
+            usuario_id=usuario.id_usuario,
+            contrasena=usuario.contrasena,
+            fecha_creacion=datetime.utcnow()
+        )
+
+        db.add(nuevo_historial)
+
+        # -----------------------------
+        # 🔁 actualizar password usuario
+        # -----------------------------
+        usuario.contrasena = hash_password(password)
+        usuario.fecha_actualizacion = datetime.utcnow()
+
+    # 🔥 commit automático por el begin()
 
     return {"ok": True}
 
