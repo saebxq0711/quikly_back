@@ -5,6 +5,7 @@ from app.db.database import get_db
 from app.core.security import get_kiosco_context
 from app.schemas.auth import KioscoContext
 from app.models.categoria import Categoria
+from app.services.storage_service import get_public_url  # 🔥 importar
 
 router = APIRouter(
     prefix="/kiosco",
@@ -32,7 +33,7 @@ async def get_categorias_kiosco(
         {
             "id": c.id_categoria,
             "nombre": c.nombre,
-            "img": c.img_categoria,
+            "img": get_public_url(c.img_categoria) if c.img_categoria else None,  # 🔹 URL pública
         }
         for c in categorias
     ]

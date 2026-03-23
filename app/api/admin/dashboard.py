@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.core.security import get_current_user
+from app.services.storage_service import get_public_url
 from app.repositories.admin.dashboard_repo import (
     get_dashboard_kpis,
     get_restaurante_info,
@@ -18,16 +19,27 @@ router = APIRouter(
 )
 
 
-
 @router.get("/")
-async def dashboard(current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def dashboard(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     restaurante_id = await get_admin_restaurante_id(db, current_user.id_usuario)
+
     if not restaurante_id:
         raise HTTPException(status_code=403, detail="Usuario no asociado a un restaurante")
 
     restaurante = await get_restaurante_info(db, restaurante_id)
+
     if not restaurante:
         raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+
+    # 🔥 AQUÍ ESTÁ EL FIX REAL
+    logo_url = (
+        get_public_url(restaurante["logo"])
+        if restaurante["logo"]
+        else None
+    )
 
     kpis = await get_dashboard_kpis(db, restaurante_id)
     pedidos_recientes = await get_pedidos_recientes(db, restaurante_id)
@@ -36,7 +48,7 @@ async def dashboard(current_user=Depends(get_current_user), db: AsyncSession = D
         {
             "id_pedido": p.id_pedido,
             "total": float(p.total),
-            "estado": {4:"Aprobado",5:"Pendiente",6:"Rechazado",7:"Entregado"}.get(p.estado_id,"Desconocido"),
+            "estado": {4: "Aprobado", 5: "Pendiente", 6: "Rechazado", 7: "Entregado"}.get(p.estado_id, "Desconocido"),
             "hora": p.fecha_creacion.strftime("%H:%M"),
         }
         for p in pedidos_recientes
@@ -49,7 +61,7 @@ async def dashboard(current_user=Depends(get_current_user), db: AsyncSession = D
         "restaurante": {
             "id": restaurante["id_restaurante"],
             "nombre": restaurante["nombre"],
-            "logo": restaurante["logo"],
+            "logo": logo_url,  # 👈 ya no mandas el path, mandas la URL real
         },
         "kpis": kpis,
         "pedidos_recientes": pedidos_recientes,

@@ -10,9 +10,7 @@ from app.models.promocion import Promocion
 from app.models.promocion_producto import PromocionProducto
 from app.models.usuarios_rol import UsuarioRol
 from app.models.producto import Producto
-
-UPLOAD_DIR = "uploads/flyers"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+from app.services.storage_service import upload_file, get_public_url, delete_file
 
 router = APIRouter(
     prefix="/admin/restaurante",
@@ -118,17 +116,26 @@ async def crear_promocion(
                     f"Conflicto con promoción existente: {p.titulo}"
                 )
 
-    # -------- Subir imagen --------
+    # -------- Subir imagen a Supabase --------
     filename = None
+    public_url = None
+
     if flyer:
         if flyer.content_type not in ["image/png", "image/jpeg", "image/webp"]:
             raise HTTPException(400, "Formato de imagen no permitido")
 
-        filename = f"{uuid.uuid4().hex}_{flyer.filename}"
-        filepath = os.path.join(UPLOAD_DIR, filename)
+        ext = flyer.filename.split(".")[-1]
+        filename = f"restaurants/{restaurante_id}/promociones/{uuid.uuid4().hex}.{ext}"
 
-        with open(filepath, "wb") as f:
-            f.write(await flyer.read())
+        file_bytes = await flyer.read()
+
+        upload_file(
+            path=filename,
+            file_bytes=file_bytes,
+            content_type=flyer.content_type
+        )
+
+        public_url = get_public_url(filename)
 
     fecha_inicio_obj = datetime.fromisoformat(fecha_inicio) if fecha_inicio else None
     fecha_fin_obj = datetime.fromisoformat(fecha_fin) if fecha_fin else None
@@ -137,7 +144,8 @@ async def crear_promocion(
         restaurante_id=restaurante_id,
         titulo=titulo.strip(),
         descripcion=descripcion.strip() if descripcion else None,
-        img_flyer=f"/{UPLOAD_DIR}/{filename}" if filename else None,
+        img_flyer=public_url,
+        img_flyer_path=filename,
         dias_semana=dias_semana,
         hora_inicio=hora_inicio_obj,
         hora_fin=hora_fin_obj,
@@ -243,6 +251,18 @@ async def cambiar_estado_promocion(
 
     if estado_id not in [1, 2, 3]:
         raise HTTPException(400, "Estado inválido")
+
+    if estado_id == 3:
+        if promo.img_flyer_path:
+            try:
+                delete_file(promo.img_flyer_path)
+            except Exception:
+                # en producción deberías loggear esto
+                pass
+
+            # limpiar referencia en DB
+            promo.img_flyer = None
+            promo.img_flyer_path = None
 
     promo.estado_id = estado_id
 

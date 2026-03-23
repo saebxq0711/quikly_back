@@ -11,6 +11,7 @@ from app.models.producto import Producto
 from app.models.grupo_opcion_producto import GrupoOpcionProducto
 
 from app.services.promociones import calcular_precio_con_promocion
+from app.services.storage_service import get_public_url
 
 
 router = APIRouter(
@@ -126,7 +127,7 @@ async def get_productos_por_categoria(
             "tiene_promocion": tiene_promocion,
             "porcentaje_descuento": porcentaje_descuento,
 
-            "img": p.img_producto,
+            "img": get_public_url(p.img_producto) if p.img_producto else None,
             "grupos_opcion": grupos,
         })
 
@@ -193,7 +194,7 @@ async def get_productos_sugeridos(
             "precio_final": precio_final,
             "tiene_promocion": tiene_promocion,
             "porcentaje_descuento": porcentaje_descuento,
-            "img": p.img_producto,
+            "img": get_public_url(p.img_producto) if p.img_producto else None
         })
 
     return response
@@ -281,6 +282,6 @@ async def get_producto_detalle(
         "tiene_promocion": tiene_promocion,
         "porcentaje_descuento": porcentaje_descuento,
 
-        "img": producto.img_producto,
+        "img": get_public_url(producto.img_producto) if producto.img_producto else None,
         "grupos_opcion": grupos,
     }

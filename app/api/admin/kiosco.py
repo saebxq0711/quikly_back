@@ -9,6 +9,7 @@ from app.models.usuario import Usuario
 from app.models.usuarios_rol import UsuarioRol
 from app.models.restaurante import Restaurante
 from app.models.historial_contrasena import HistorialContrasena
+from app.services.storage_service import get_public_url
 
 router = APIRouter(
     prefix="/admin/kiosco",
@@ -59,6 +60,9 @@ async def obtener_usuario_kiosco(
 
     restaurante = await db.get(Restaurante, restaurante_id)
 
+    # 🚀 obtener URL pública de Supabase si hay logo
+    img_url = get_public_url(restaurante.logo) if restaurante and restaurante.logo else None
+
     return {
         "id_usuario": usuario.id_usuario,
         "documento": usuario.documento,
@@ -67,7 +71,7 @@ async def obtener_usuario_kiosco(
         "telefono": usuario.telefono,
         "correo": usuario.correo,
         "estado_id": usuario.estado_id,
-        "img_restaurante": restaurante.logo if restaurante else None,
+        "img_restaurante": img_url,
     }
 
 

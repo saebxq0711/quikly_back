@@ -13,6 +13,8 @@ from app.models.usuario import Usuario
 from app.models.restaurante import Restaurante
 from app.models.usuarios_rol import UsuarioRol
 from app.models.historial_contrasena import HistorialContrasena
+from app.services.storage_service import upload_file
+from app.services.storage_service import get_public_url
 
 router = APIRouter(
     prefix="/admin/perfil",
@@ -125,7 +127,7 @@ async def cambiar_logo_restaurante(
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 1️⃣ obtener restaurante del admin
+    # 1️⃣ obtener restaurante
     stmt = select(UsuarioRol.restaurante_id).where(
         UsuarioRol.user_id == admin.id_usuario,
         UsuarioRol.rol_id == 2
@@ -136,30 +138,48 @@ async def cambiar_logo_restaurante(
         raise HTTPException(403, "Admin no asociado a restaurante")
 
     # 2️⃣ validar archivo
-    if logo.content_type not in ["image/png", "image/jpeg", "image/webp"]:
-        raise HTTPException(400, "Formato de imagen no permitido")
+    if logo.content_type not in ["image/png", "image/jpeg", "image/webp", "image/avif"]:
+        raise HTTPException(400, "Formato no permitido")
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    # 3️⃣ generar nombre limpio
+    import os
+    _, extension = os.path.splitext(logo.filename)
+    extension = extension.replace(".", "")
 
-    filename = f"{uuid.uuid4().hex}_{logo.filename}"
-    filepath = os.path.join(UPLOAD_DIR, filename)
+    file_path = f"restaurants/{restaurante_id}/logo.{extension}"
 
-    # 3️⃣ guardar archivo
-    with open(filepath, "wb") as f:
-        f.write(await logo.read())
+    file_bytes = await logo.read()
 
-    # 4️⃣ actualizar restaurante
+    # 🔒 validar tamaño (3MB)
+    if len(file_bytes) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Máximo 3MB")
+
+    # 4️⃣ obtener restaurante (para borrar imagen anterior)
     stmt = select(Restaurante).where(Restaurante.id_restaurante == restaurante_id)
     restaurante = (await db.execute(stmt)).scalar_one()
 
-    restaurante.logo = f"/{UPLOAD_DIR}/{filename}"
+    old_logo = restaurante.logo
+
+    # 5️⃣ eliminar anterior si cambia
+    if old_logo and old_logo != file_path:
+        from app.services.storage_service import delete_file
+        delete_file(old_logo)
+
+    # 6️⃣ subir nueva imagen
+    upload_file(
+        file_path,
+        file_bytes,
+        logo.content_type
+    )
+
+    # 7️⃣ guardar path
+    restaurante.logo = file_path
 
     await db.commit()
-    await db.refresh(restaurante)
 
     return {
         "ok": True,
-        "logo": restaurante.logo
+        "logo": file_path
     }
 
 @router.get("")
@@ -189,6 +209,8 @@ async def obtener_perfil_admin(
     if not result:
         raise HTTPException(404, "Perfil no encontrado")
 
+    logo_url = get_public_url(result.logo) if result.logo else None
+
     return {
         "usuario": {
             "nombres": result.nombres,
@@ -198,7 +220,7 @@ async def obtener_perfil_admin(
         },
         "restaurante": {
             "nombre": result.nombre,
-            "logo": result.logo,
+            "logo": logo_url,
         }
     }
 

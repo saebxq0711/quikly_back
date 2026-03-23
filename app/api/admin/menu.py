@@ -15,17 +15,12 @@ from app.models.opcion_producto import OpcionProducto
 from app.models.usuarios_rol import UsuarioRol
 from app.schemas.menu import MenuRestauranteOut, CategoriaOut, ProductoOut, CategoriaOrdenIn
 from app.repositories.menu_repo import get_restaurant_menu
+from app.services.storage_service import upload_file, delete_file, get_public_url
 
 router = APIRouter(
     prefix="/admin/restaurante/menu",
     tags=["Admin Restaurante - Menú"]
 )
-
-UPLOAD_DIR = "uploads/categorias"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-UPLOAD_DIR_PRODUCTOS = "uploads/productos"
-os.makedirs(UPLOAD_DIR_PRODUCTOS, exist_ok=True)
 
 # ======================
 # Helper: obtener restaurante del admin
@@ -54,6 +49,7 @@ async def get_admin_restaurante_id(admin, db: AsyncSession) -> int:
 async def obtener_menu(
     admin=Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
+    
 ):
     restaurante_id = await get_admin_restaurante_id(admin, db)
     categorias_data = await get_restaurant_menu(db, restaurante_id)
@@ -63,10 +59,18 @@ async def obtener_menu(
             CategoriaOut(
                 id_categoria=cat["id_categoria"],
                 nombre=cat["nombre"],
-                img_categoria=cat["img_categoria"],
+                img_categoria=get_public_url(cat["img_categoria"]) if cat["img_categoria"] else None,
                 orden=cat["orden"],
                 estado_id=cat["estado_id"],
-                productos=[ProductoOut(**p) for p in cat["productos"]],
+                productos=[
+                    ProductoOut(
+                        **{
+                            **p,
+                            "img_producto": get_public_url(p["img_producto"]) if p["img_producto"] else None
+                        }
+                    )
+                    for p in cat["productos"]
+                ]
             )
             for cat in categorias_data
         ]
@@ -90,12 +94,13 @@ async def crear_categoria(
     if imagen:
         ext = imagen.filename.split(".")[-1]
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = f"{UPLOAD_DIR}/{filename}"
+        file_path = f"restaurants/{restaurante_id}/categorias/{filename}"
 
-        with open(filepath, "wb") as f:
-            f.write(await imagen.read())
+        file_bytes = await imagen.read()
 
-        img_url = f"/{filepath}"
+        upload_file(file_path, file_bytes, imagen.content_type)
+
+        img_url = file_path
 
     stmt = select(func.coalesce(func.max(Categoria.orden), 0)).where(
         Categoria.restaurante_id == restaurante_id
@@ -117,7 +122,7 @@ async def crear_categoria(
     return CategoriaOut(
         id_categoria=nueva_cat.id_categoria,
         nombre=nueva_cat.nombre,
-        img_categoria=nueva_cat.img_categoria,
+        img_categoria=get_public_url(nueva_cat.img_categoria) if nueva_cat.img_categoria else None,
         orden=nueva_cat.orden,
         estado_id=nueva_cat.estado_id,
         productos=[]
@@ -149,14 +154,18 @@ async def editar_categoria(
     cat.nombre = nombre
 
     if imagen:
+        if cat.img_categoria:
+            delete_file(cat.img_categoria)
+
         ext = imagen.filename.split(".")[-1]
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = f"{UPLOAD_DIR}/{filename}"
+        file_path = f"restaurants/{restaurante_id}/categorias/{filename}"
 
-        with open(filepath, "wb") as f:
-            f.write(await imagen.read())
+        file_bytes = await imagen.read()
 
-        cat.img_categoria = f"/{filepath}"
+        upload_file(file_path, file_bytes, imagen.content_type)
+
+        cat.img_categoria = file_path
 
     await db.commit()
     await db.refresh(cat)
@@ -164,7 +173,7 @@ async def editar_categoria(
     return CategoriaOut(
         id_categoria=cat.id_categoria,
         nombre=cat.nombre,
-        img_categoria=cat.img_categoria,
+        img_categoria=get_public_url(cat.img_categoria) if cat.img_categoria else None,
         orden=cat.orden,
         estado_id=cat.estado_id,
         productos=[]
@@ -199,7 +208,7 @@ async def cambiar_estado_categoria(
     return CategoriaOut(
         id_categoria=cat.id_categoria,
         nombre=cat.nombre,
-        img_categoria=cat.img_categoria,
+        img_categoria=get_public_url(cat.img_categoria) if cat.img_categoria else None,
         orden=cat.orden,
         estado_id=cat.estado_id,
         productos=[]
@@ -252,7 +261,7 @@ async def obtener_categoria_detalle(
             nombre=p.nombre,
             descripcion=p.descripcion,
             precio_base=p.precio_base,
-            img_producto=p.img_producto, 
+            img_producto=get_public_url(p.img_producto) if p.img_producto else None,
             estado_id=p.estado_id,
         )
         for p in categoria.productos
@@ -261,7 +270,7 @@ async def obtener_categoria_detalle(
     return CategoriaOut(
         id_categoria=categoria.id_categoria,
         nombre=categoria.nombre,
-        img_categoria=categoria.img_categoria,
+        img_categoria=get_public_url(categoria.img_categoria) if categoria.img_categoria else None,
         orden=categoria.orden,
         estado_id=categoria.estado_id,
         productos=productos,
@@ -285,12 +294,13 @@ async def crear_producto(
     if imagen:
         ext = imagen.filename.split(".")[-1]
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = f"uploads/productos/{filename}"
+        file_path = f"restaurants/{restaurante_id}/productos/{filename}"
 
-        with open(filepath, "wb") as f:
-            f.write(await imagen.read())
+        file_bytes = await imagen.read()
 
-        img_url = f"/{filepath}"
+        upload_file(file_path, file_bytes, imagen.content_type)
+
+        img_url = file_path
 
     nuevo = Producto(
         restaurante_id=restaurante_id,
@@ -338,6 +348,7 @@ async def obtener_producto_detalle(
         "id_producto": producto.id_producto,
         "nombre": producto.nombre,
         "descripcion": producto.descripcion,
+        "img_producto": get_public_url(producto.img_producto) if producto.img_producto else None,
         "precio_base": producto.precio_base,
         "estado_id": producto.estado_id,
         "grupos": [
@@ -463,14 +474,18 @@ async def editar_producto(
         producto.precio_base = precio_base
 
     if imagen:
+        if producto.img_producto:
+            delete_file(producto.img_producto)
+
         ext = imagen.filename.split(".")[-1]
         filename = f"{uuid.uuid4()}.{ext}"
-        filepath = f"{UPLOAD_DIR_PRODUCTOS}/{filename}"
+        file_path = f"restaurants/{producto.restaurante_id}/productos/{filename}"
 
-        with open(filepath, "wb") as f:
-            f.write(await imagen.read())
+        file_bytes = await imagen.read()
 
-        producto.img_producto = f"/{filepath}"
+        upload_file(file_path, file_bytes, imagen.content_type)
+
+        producto.img_producto = file_path
 
     await db.commit()
     await db.refresh(producto)

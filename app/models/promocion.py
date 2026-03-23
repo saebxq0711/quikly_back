@@ -21,6 +21,7 @@ class Promocion(Base):
     titulo = Column(String, nullable=False)
     descripcion = Column(String, nullable=True)
     img_flyer = Column(String, nullable=True)
+    img_flyer_path = Column(String, nullable=True)
 
     # "1,2,3,4,5"
     dias_semana = Column(String, nullable=True)

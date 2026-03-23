@@ -7,13 +7,12 @@ from app.core.security import get_kiosco_context
 from app.models.promocion import Promocion
 from sqlalchemy import select, or_, and_
 from datetime import datetime
+from app.services.storage_service import get_public_url
 
 router = APIRouter(
     prefix="/kiosco",
     tags=["Kiosco"]
 )
-
-
     
 @router.get("/context")
 async def get_kiosco_home(
@@ -25,11 +24,13 @@ async def get_kiosco_home(
     if not restaurante:
         raise HTTPException(404, "Restaurante no encontrado")
 
+    logo_url = get_public_url(restaurante.logo) if restaurante.logo else None
+
     return {
         "restaurante": {
             "id": restaurante.id_restaurante,
             "nombre": restaurante.nombre,
-            "logo": restaurante.logo,
+            "logo": logo_url,
         }
     }
 

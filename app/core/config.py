@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     bancolombia_public_key: str
 
+    supabase_url: str
+    supabase_secret_key: str
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
