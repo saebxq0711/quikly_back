@@ -179,7 +179,7 @@ async def cambiar_logo_restaurante(
 
     return {
         "ok": True,
-        "logo": file_path
+        "logo": get_public_url(file_path)
     }
 
 @router.get("")

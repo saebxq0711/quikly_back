@@ -140,21 +140,22 @@ async def clientes(
     session: AsyncSession,
     restaurante_id: int,
 ):
-    cliente_expr = func.coalesce(
-        Pedido.cliente_identificacion,
-        Pedido.cliente_correo,
-        Pedido.cliente_telefono,
-        literal("Consumidor final"),
-    )
-
     stmt = (
         select(
-            cliente_expr.label("cliente"),
+            Pedido.cliente_identificacion,
+            Pedido.cliente_nombres,
+            Pedido.cliente_correo,
+            Pedido.cliente_telefono,
             func.count(Pedido.id_pedido).label("pedidos"),
             func.coalesce(func.sum(Pedido.total), 0).label("total"),
         )
         .where(Pedido.restaurante_id == restaurante_id)
-        .group_by(cliente_expr)
+        .group_by(
+            Pedido.cliente_identificacion,
+            Pedido.cliente_nombres,
+            Pedido.cliente_correo,
+            Pedido.cliente_telefono,
+        )
         .order_by(func.sum(Pedido.total).desc())
     )
 
@@ -167,9 +168,15 @@ async def pedidos(
     restaurante_id: int,
     desde=None,
     hasta=None,
+    page: int = 1,
+    limit: int = 20,
 ):
     where = ["p.restaurante_id = :restaurante_id"]
     params = {"restaurante_id": restaurante_id}
+    offset = (page - 1) * limit
+
+    params["limit"] = limit
+    params["offset"] = offset
 
     if desde:
         where.append("p.fecha_creacion >= :desde")
@@ -220,21 +227,31 @@ async def pedidos(
                 p.id_pedido,
                 p.fecha_creacion,
                 e.nombre AS estado,
-                COALESCE(
-                    p.cliente_nombres,
-                    p.cliente_identificacion,
-                    p.cliente_correo,
-                    p.cliente_telefono,
-                    'Consumidor final'
-                ) AS cliente,
+                COALESCE(p.cliente_nombres, 'Consumidor final') AS cliente,
                 p.total
             FROM pedido p
             JOIN estado e ON e.id_estado = p.estado_id
             WHERE {" AND ".join(where)}
             ORDER BY p.fecha_creacion DESC
-            LIMIT 200
+            LIMIT :limit OFFSET :offset
         """),
         params,
     )
 
-    return resumen_row, estados.fetchall(), detalle.fetchall()
+    total_query = await session.execute(
+        text(f"""
+            SELECT COUNT(*) as total
+            FROM pedido p
+            WHERE {" AND ".join(where)}
+        """),
+        params,
+    )
+
+    total_registros = total_query.first().total
+
+    return (
+        resumen_row,
+        estados.fetchall(),
+        detalle.fetchall(),
+        total_registros
+    )

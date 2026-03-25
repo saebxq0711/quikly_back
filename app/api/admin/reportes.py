@@ -213,7 +213,10 @@ async def reporte_clientes(
 
     return [
         {
-            "cliente": r.cliente,
+            "identificacion": r.cliente_identificacion,
+            "nombre": r.cliente_nombres,
+            "correo": r.cliente_correo,
+            "telefono": r.cliente_telefono,
             "pedidos": r.pedidos,
             "total": float(r.total),
         }
@@ -227,17 +230,21 @@ async def reporte_clientes(
 async def reporte_pedidos(
     desde: str | None = None,
     hasta: str | None = None,
+    page: int = 1,
+    limit: int = 20,
     session: AsyncSession = Depends(get_db),
     admin: AdminContext = Depends(get_admin_user),
 ):
     desde_dt = datetime.strptime(desde, "%Y-%m-%d") if desde else None
     hasta_dt = datetime.strptime(hasta, "%Y-%m-%d") if hasta else None
 
-    resumen, estados, detalle = await reportes_repo.pedidos(
+    resumen, estados, detalle, total = await reportes_repo.pedidos(
         session,
         admin.restaurante_id,
         desde_dt,
         hasta_dt,
+        page,
+        limit,
     )
 
     return {
@@ -253,7 +260,7 @@ async def reporte_pedidos(
         "detalle": [
             {
                 "id_pedido": d.id_pedido,
-                "fecha": d.fecha_creacion.strftime("%Y-%m-%d %H:%M"),
+                "fecha": str(d.fecha_creacion),
                 "estado": d.estado,
                 "cliente": d.cliente,
                 "total": float(d.total),

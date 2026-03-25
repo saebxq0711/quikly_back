@@ -16,6 +16,7 @@ class PedidoProducto(Base):
 
     # Relaciones
     pedido = relationship("Pedido", back_populates="productos")
+    producto = relationship("Producto")
 
 # Import tardío para evitar errores de inicialización
 from app.models.pedido_producto_opcion import PedidoProductoOpcion

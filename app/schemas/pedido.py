@@ -23,6 +23,7 @@ class PedidoProductoSchema(BaseModel):
     cantidad: int
     precio_base: float
     subtotal: float
+    imagen_url: str | None = None
     opciones: List[PedidoProductoOpcionSchema] = []
 
     model_config = {
